@@ -37,6 +37,17 @@ use crate::{
     },
 };
 
+
+#[derive(Debug, Clone)]
+pub struct NewSessionId {
+    pub session_id: Arc<str>,
+}
+impl NewSessionId {
+    pub fn value(&self) -> &str {
+        &self.session_id
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct StreamableHttpServerConfig {
@@ -1047,7 +1058,9 @@ where
         }
 
         // json deserialize request body
+
         let (part, body) = request.into_parts();
+
         let mut message = match expect_json(body).await {
             Ok(message) => message,
             Err(response) => return Ok(response),
@@ -1159,6 +1172,11 @@ where
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
+                if let ClientJsonRpcMessage::Request(req) = &mut message {
+                    req.request.extensions_mut().insert(NewSessionId {
+                        session_id: session_id.clone(),
+                    });
+                }
                 // spawn a task to serve the session
                 Self::spawn_session_worker(
                     self.session_manager.clone(),
