@@ -9,9 +9,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rmcp::{
-    ServiceExt,
+    RoleServer, ServerHandler, ServiceExt,
+    model::{InitializeRequestParams, InitializeResult, ServerInfo},
+    service::RequestContext,
     transport::{
-        StreamableHttpClientTransport,
+        DownstreamSessionId, StreamableHttpClientTransport,
         streamable_http_client::StreamableHttpClientTransportConfig,
         streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService,
@@ -24,6 +26,31 @@ use tokio_util::sync::CancellationToken;
 
 mod common;
 use common::calculator::Calculator;
+
+#[derive(Clone)]
+struct SessionIdCapturingServer {
+    session_ids: tokio::sync::mpsc::UnboundedSender<Arc<str>>,
+}
+
+impl ServerHandler for SessionIdCapturingServer {
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<InitializeResult, rmcp::ErrorData>> + Send + '_ {
+        context.peer.set_peer_info(request);
+        let session_id = context
+            .extensions
+            .get::<DownstreamSessionId>()
+            .expect("downstream session ID extension should be present")
+            .session_id
+            .clone();
+        self.session_ids
+            .send(session_id)
+            .expect("session ID receiver should remain open");
+        std::future::ready(Ok(ServerInfo::default()))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Shared in-memory store used across tests
@@ -79,6 +106,62 @@ fn make_service(
         cfg.session_store = Some(session_store);
         cfg
     })
+}
+
+#[tokio::test]
+async fn initialize_exposes_generated_downstream_session_id() -> anyhow::Result<()> {
+    let (session_id_tx, mut session_id_rx) = tokio::sync::mpsc::unbounded_channel();
+    let ct = CancellationToken::new();
+    let service = StreamableHttpService::new(
+        move || {
+            Ok(SessionIdCapturingServer {
+                session_ids: session_id_tx.clone(),
+            })
+        },
+        LocalSessionManager::default().into(),
+        {
+            let mut cfg = StreamableHttpServerConfig::default();
+            cfg.stateful_mode = true;
+            cfg.sse_keep_alive = None;
+            cfg.cancellation_token = ct.child_token();
+            cfg
+        },
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .header("accept", "application/json, text/event-stream")
+        .header("content-type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 200);
+    let response_session_id = response
+        .headers()
+        .get("mcp-session-id")
+        .expect("session ID response header should be present")
+        .to_str()?;
+    let handler_session_id =
+        tokio::time::timeout(std::time::Duration::from_secs(1), session_id_rx.recv())
+            .await?
+            .expect("initialize handler should report its session ID");
+    assert_eq!(handler_session_id.as_ref(), response_session_id);
+
+    ct.cancel();
+    handle.await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

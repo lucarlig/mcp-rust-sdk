@@ -37,12 +37,18 @@ use crate::{
     },
 };
 
-
-#[derive(Debug, Clone)]
-pub struct NewSessionId {
+/// The session ID assigned by the server to a downstream Streamable HTTP client.
+///
+/// This extension is available to the server's `initialize` handler after RMCP
+/// creates a new session, including when a persisted session is restored.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DownstreamSessionId {
+    /// The downstream session ID.
     pub session_id: Arc<str>,
 }
-impl NewSessionId {
+
+impl DownstreamSessionId {
+    /// Returns the downstream session ID.
     pub fn value(&self) -> &str {
         &self.session_id
     }
@@ -818,6 +824,9 @@ where
         restore_init.insert_extension(SessionRestoreMarker {
             id: session_id.clone(),
         });
+        restore_init.insert_extension(DownstreamSessionId {
+            session_id: session_id.clone(),
+        });
         let mut restore_initialized = ClientJsonRpcMessage::notification(
             ClientNotification::InitializedNotification(InitializedNotification {
                 ..Default::default()
@@ -1058,9 +1067,7 @@ where
         }
 
         // json deserialize request body
-
         let (part, body) = request.into_parts();
-
         let mut message = match expect_json(body).await {
             Ok(message) => message,
             Err(response) => return Ok(response),
@@ -1173,7 +1180,7 @@ where
                     .await
                     .map_err(internal_error_response("create session"))?;
                 if let ClientJsonRpcMessage::Request(req) = &mut message {
-                    req.request.extensions_mut().insert(NewSessionId {
+                    req.request.extensions_mut().insert(DownstreamSessionId {
                         session_id: session_id.clone(),
                     });
                 }
