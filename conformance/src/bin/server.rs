@@ -771,7 +771,7 @@ impl ServerHandler for ConformanceServer {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let port: u16 = std::env::var("PORT")
@@ -779,7 +779,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8001);
 
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     tracing::info!("Starting conformance server on {}", bind_addr);
 
     let server = ConformanceServer::new();

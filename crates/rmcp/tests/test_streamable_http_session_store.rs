@@ -13,11 +13,12 @@ use rmcp::{
     model::{InitializeRequestParams, InitializeResult, ServerInfo},
     service::RequestContext,
     transport::{
-        DownstreamSessionId, StreamableHttpClientTransport,
+        StreamableHttpClientTransport,
         streamable_http_client::StreamableHttpClientTransportConfig,
         streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService,
             session::{SessionState, SessionStore, SessionStoreError, local::LocalSessionManager},
+            tower::DownstreamSessionId,
         },
     },
 };
